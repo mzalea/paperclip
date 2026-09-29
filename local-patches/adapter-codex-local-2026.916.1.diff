@@ -1,0 +1,108 @@
+--- a/dist/server/execute.js
++++ b/dist/server/execute.js
+@@ -14,6 +14,7 @@
+ import { prepareCodexRuntimeConfig } from "./runtime-config.js";
+ import { resolveCodexDesiredSkillNames } from "./skills.js";
+ import { buildCodexExecArgs } from "./codex-args.js";
++import { getQuotaWindows } from "./quota.js";
+ import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+ import { CODEX_OUTPUT_INACTIVITY_MONITOR_SIGTERM_GRACE_MS, createCodexOutputInactivityMonitor, formatOutputInactivityMonitorErrorMessage, resolveCodexInactivityTimeout, } from "./output-inactivity-monitor.js";
+ import { CODEX_PROCESS_ACTIVITY_POLL_INTERVAL_MS, createCodexProcessActivityMonitor, } from "./process-activity-monitor.js";
+@@ -354,7 +355,97 @@
+     }
+     await pruneBrokenUnavailablePaperclipSkillSymlinks(skillsHome, skillsEntries.map((entry) => entry.runtimeName), onLog);
+ }
++// Local trusted-instance patch: quota reserve gate. Instead of fixed per-agent
++// daily run caps, refuse to start Codex once any provider quota window is at or
++// above the reserve line, leaving the remainder for the operator. The refusal is
++// reported as a provider_quota failure with retryNotBefore set to the window
++// reset, so the server's durable scheduled-retry path resumes the work later
++// (a skipped wake would be dropped). Quota lookup failures fail open: the run
++// proceeds and Codex's own quota errors remain the hard backstop.
++const CODEX_QUOTA_RESERVE_DEFAULT_PERCENT = 80;
++const CODEX_QUOTA_CACHE_TTL_MS = 5 * 60 * 1000;
++const CODEX_QUOTA_LOOKUP_TIMEOUT_MS = 20_000;
++const CODEX_QUOTA_FALLBACK_RETRY_MS = 30 * 60 * 1000;
++let codexQuotaCache = null;
++async function readCachedCodexQuota() {
++    const now = Date.now();
++    if (codexQuotaCache && now - codexQuotaCache.fetchedAt < CODEX_QUOTA_CACHE_TTL_MS) {
++        return codexQuotaCache.result;
++    }
++    let timeoutId = null;
++    try {
++        const result = await Promise.race([
++            getQuotaWindows(),
++            new Promise((_, reject) => {
++                timeoutId = setTimeout(() => reject(new Error(`quota lookup timed out after ${CODEX_QUOTA_LOOKUP_TIMEOUT_MS / 1000}s`)), CODEX_QUOTA_LOOKUP_TIMEOUT_MS);
++            }),
++        ]);
++        if (result?.ok)
++            codexQuotaCache = { fetchedAt: now, result };
++        return result;
++    }
++    finally {
++        if (timeoutId)
++            clearTimeout(timeoutId);
++    }
++}
++export function evaluateCodexQuotaReserve(quota, reservePercent, now = new Date()) {
++    const exhausted = (quota?.windows ?? []).filter((w) => typeof w.usedPercent === "number" && w.usedPercent >= reservePercent);
++    if (!exhausted.length)
++        return null;
++    const resets = exhausted
++        .map((w) => (w.resetsAt ? new Date(w.resetsAt).getTime() : NaN))
++        .filter((t) => Number.isFinite(t) && t > now.getTime());
++    const retryAt = resets.length
++        ? new Date(Math.max(...resets))
++        : new Date(now.getTime() + CODEX_QUOTA_FALLBACK_RETRY_MS);
++    const detail = exhausted.map((w) => `${w.label} ${w.usedPercent}%`).join(", ");
++    return { retryNotBefore: retryAt.toISOString(), detail };
++}
++async function checkCodexQuotaReserve(config, onLog) {
++    const reservePercent = asNumber(config.quotaReservePercent, CODEX_QUOTA_RESERVE_DEFAULT_PERCENT);
++    if (!(reservePercent > 0 && reservePercent < 100))
++        return null;
++    let quota;
++    try {
++        quota = await readCachedCodexQuota();
++    }
++    catch (err) {
++        await onLog?.("stderr", `[paperclip] quota reserve check failed open: ${err instanceof Error ? err.message : String(err)}\n`);
++        return null;
++    }
++    if (!quota?.ok) {
++        await onLog?.("stderr", `[paperclip] quota reserve check failed open: ${quota?.error ?? "no quota result"}\n`);
++        return null;
++    }
++    const block = evaluateCodexQuotaReserve(quota, reservePercent);
++    if (!block)
++        return null;
++    const errorMessage = `Codex quota reserve reached (${block.detail}; reserve line ${reservePercent}%). Deferred until ${block.retryNotBefore}.`;
++    await onLog?.("stderr", `[paperclip] ${errorMessage}\n`);
++    return {
++        exitCode: 1,
++        signal: null,
++        timedOut: false,
++        errorCode: "provider_quota",
++        errorFamily: "provider_quota",
++        errorMessage,
++        retryNotBefore: block.retryNotBefore,
++        provider: "openai",
++        resultJson: {
++            errorFamily: "provider_quota",
++            retryNotBefore: block.retryNotBefore,
++            transientRetryNotBefore: block.retryNotBefore,
++            providerQuotaRetryNotBefore: block.retryNotBefore,
++            quotaReserve: { reservePercent, windows: block.detail },
++            executionRecovery: { kind: "bootstrap", providerWorkStarted: false },
++        },
++    };
++}
+ export async function execute(ctx) {
++    const quotaReserveBlock = await checkCodexQuotaReserve(parseObject(ctx.config), ctx.onLog);
++    if (quotaReserveBlock)
++        return quotaReserveBlock;
+     const engineSelection = await resolveCodexExecutionEngineForRun(ctx);
+     if (engineSelection.unavailableReason) {
+         return {
