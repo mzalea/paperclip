@@ -1,6 +1,7 @@
 import * as executionContinuation from "../services/execution-continuation.js";
 import { legacyDispositionFingerprint, LEGACY_DISPOSITION_REPAIR_INSTRUCTION } from "../services/recovery/legacy-continuation.js";
 import * as controllerLeases from "../services/legacy-controller-lease.js";
+import * as agentStartLock from "../services/agent-start-lock.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { randomUUID } from "node:crypto";
 import { terminalizeLegacyExecution } from "../services/legacy-execution-recovery.js";
@@ -1590,6 +1591,28 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       )).toBe(false);
     } finally {
       build.mockRestore();
+    }
+  });
+
+  it("keeps resuming queued runs for other agents when one agent's queued run fails to start", async () => {
+    const failing = await seedQueuedIssueRunFixture();
+    const healthy = await seedQueuedIssueRunFixture();
+    const attemptedAgentIds: string[] = [];
+    const startLock = vi
+      .spyOn(agentStartLock, "withAgentStartLock")
+      .mockImplementation((async (agentId: string) => {
+        attemptedAgentIds.push(agentId);
+        if (agentId === failing.agentId) throw new Error("queued run claim rejected");
+        return [];
+      }) as typeof agentStartLock.withAgentStartLock);
+    try {
+      const heartbeat = heartbeatService(db);
+      await expect(heartbeat.resumeQueuedRuns()).resolves.toBeUndefined();
+      expect(attemptedAgentIds).toEqual(
+        expect.arrayContaining([failing.agentId, healthy.agentId]),
+      );
+    } finally {
+      startLock.mockRestore();
     }
   });
 

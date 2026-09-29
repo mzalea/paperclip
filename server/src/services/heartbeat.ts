@@ -19552,7 +19552,11 @@ export function heartbeatService(
 
     const agentIds = [...new Set(queuedRuns.map((r) => r.agentId))];
     for (const agentId of agentIds) {
-      await startNextQueuedRunForAgent(agentId);
+      // One agent's queued run failing to start must not strand queued work
+      // for every other agent and company behind it.
+      await startNextQueuedRunForAgent(agentId).catch((err) => {
+        logger.error({ err, agentId }, "queued run recovery failed for agent");
+      });
     }
   }
 
