@@ -1,8 +1,12 @@
 # Local patches
 
+> **Archived.** The instance now builds from source on branch `local/main`
+> (see `LOCAL.md` there). This branch keeps the earlier dist-level patches and
+> their upstream verdicts for reference.
+
 Changes carried on top of upstream Paperclip for a self-hosted, local trusted
 instance. Branch `local/v2026.916.1` is cut from upstream tag `v2026.916.1`,
-the version the instance runs.
+the version the instance ran.
 
 ## How they are deployed
 
