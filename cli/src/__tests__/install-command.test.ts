@@ -191,6 +191,16 @@ describe("managed install commands", () => {
     expect(calls[stageIndex]?.[2]?.env).not.toHaveProperty("NODE_ENV");
   });
 
+  it("packs staged bundled packages without re-running their lifecycle scripts", async () => {
+    const sha = "f".repeat(40);
+    const runCommand = createGitCheckoutRunCommand(sha);
+    await installGitPayload("paperclipai/paperclip", sha, runCommand, resolveInstallStorePaths());
+    const bundledPackCalls = runCommand.mock.calls.filter(([file, args]) =>
+      file === "npm" && args[0] === "pack" && args[1]?.includes("workspace-package-"));
+    expect(bundledPackCalls).toHaveLength(1);
+    expect(bundledPackCalls[0]?.[1]).toContain("--ignore-scripts");
+  });
+
   it("builds git checkouts with NODE_ENV cleared so ambient production mode keeps devDependencies", async () => {
     process.env.NODE_ENV = "production";
     const sha = "d".repeat(40);
