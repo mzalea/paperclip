@@ -68,6 +68,12 @@ export function getConfigSchema(): AdapterConfigSchema {
         hint: "Defaults to 0, which closes the ACP process after each run while retaining persistent session state.",
         meta: acpVisible,
       },
+      {
+        key: "quotaReservePercent",
+        label: "Quota reserve %",
+        type: "number",
+        hint: "Optional. When any Codex quota window reaches this usage percent, runs wait for the window to reset instead of starting. Leave empty to use the full quota.",
+      },
     ],
   };
 }

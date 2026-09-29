@@ -90,6 +90,7 @@ import {
 import { prepareCodexRuntimeConfig } from "./runtime-config.js";
 import { resolveCodexDesiredSkillNames } from "./skills.js";
 import { buildCodexExecArgs } from "./codex-args.js";
+import { createQuotaReserveGate } from "./quota-reserve.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 import {
   CODEX_OUTPUT_INACTIVITY_MONITOR_SIGTERM_GRACE_MS,
@@ -566,7 +567,11 @@ export async function ensureCodexSkillsInjected(
   );
 }
 
+const checkQuotaReserve = createQuotaReserveGate();
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+  const quotaReserveBlock = await checkQuotaReserve(parseObject(ctx.config), ctx.onLog);
+  if (quotaReserveBlock) return quotaReserveBlock;
   const providerStop = createProviderStoppedBoundary(ctx.onProviderStopped);
   const engineSelection = await resolveCodexExecutionEngineForRun(ctx);
   if (engineSelection.unavailableReason) {
