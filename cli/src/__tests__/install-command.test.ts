@@ -168,6 +168,29 @@ describe("managed install commands", () => {
     expect(installCall?.[1].filter((arg) => arg.endsWith(".tgz"))).toHaveLength(4);
   });
 
+  it("stages release package assets after the build and before packing when the checkout provides the script", async () => {
+    const sha = "e".repeat(40);
+    const base = createGitCheckoutRunCommand(sha);
+    const runCommand = vi.fn(async (file: string, args: string[], options?: Parameters<CommandRunner>[2]) => {
+      const result = await base(file, args, options);
+      if (file === "tar") {
+        const checkout = args[args.indexOf("-C") + 1];
+        fs.writeFileSync(path.join(checkout, "scripts", "stage-package-assets.sh"), "#!/usr/bin/env bash\n");
+      }
+      return result;
+    });
+    await installGitPayload("paperclipai/paperclip", sha, runCommand, resolveInstallStorePaths());
+    const calls = runCommand.mock.calls;
+    const stageIndex = calls.findIndex(([file, args]) => file === "bash" && args[0] === "scripts/stage-package-assets.sh");
+    const serverBuildIndex = calls.findIndex(([file, args]) => file === "corepack" && args.includes("@paperclipai/server..."));
+    const firstPackIndex = calls.findIndex(([file, args]) =>
+      (file === "corepack" && args.includes("pack")) ||
+      (file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs")));
+    expect(stageIndex).toBeGreaterThan(serverBuildIndex);
+    expect(stageIndex).toBeLessThan(firstPackIndex);
+    expect(calls[stageIndex]?.[2]?.env).not.toHaveProperty("NODE_ENV");
+  });
+
   it("builds git checkouts with NODE_ENV cleared so ambient production mode keeps devDependencies", async () => {
     process.env.NODE_ENV = "production";
     const sha = "d".repeat(40);
