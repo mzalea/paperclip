@@ -4713,10 +4713,65 @@ export function recoveryService(
         }
         const participantLatestRun = participantLatestRunForRecovery;
 
-        if (
-          !participantLatestRun ||
-          !isTerminalIssueRun(participantLatestRun)
-        ) {
+        if (!participantLatestRun) {
+          // The first stage wake can be dropped (for example skipped while the
+          // submitting run still held the execution lock), leaving the review
+          // with no participant run to retry. Once no execution path remains
+          // on the issue, dispatch the participant instead of skipping forever.
+          if (
+            !latestRun ||
+            !isTerminalIssueRun(latestRun) ||
+            (await hasActiveExecutionPath(issue.companyId, issue.id, null))
+          ) {
+            result.skipped += 1;
+            continue;
+          }
+          if (!agentInvokable) {
+            const updated = await escalateStrandedAssignedIssue({
+              issue,
+              previousStatus: "in_review",
+              latestRun,
+              notice: buildExecutionReviewParticipantUnavailableNoticeSeed(),
+              recoveryCause: EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
+            });
+            if (updated) {
+              result.escalated += 1;
+              result.issueIds.push(issue.id);
+            } else {
+              result.skipped += 1;
+            }
+            continue;
+          }
+          if (
+            (await hasQueuedIssueWake(issue.companyId, issue.id, participantAgentId)) ||
+            (await isInvocationBudgetBlocked(issue, participantAgentId))
+          ) {
+            result.skipped += 1;
+            continue;
+          }
+          const queued = await enqueueStrandedIssueRecovery({
+            issueId: issue.id,
+            agentId: participantAgentId,
+            reason: EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
+            retryReason: EXECUTION_REVIEW_PARTICIPANT_RECOVERY_REASON,
+            source: "issue.execution_review_recovery",
+            extraContext: {
+              currentStageId: pendingExecutionState.currentStageId ?? null,
+              currentStageType: pendingExecutionState.currentStageType ?? null,
+              reviewRecoveryInstruction:
+                "The execution-review stage never started a reviewer run. Submit the review decision now, or mark the issue blocked with the exact unblock action.",
+            },
+          });
+          if (queued) {
+            result.reviewParticipantRequeued += 1;
+            result.issueIds.push(issue.id);
+          } else {
+            result.skipped += 1;
+          }
+          continue;
+        }
+
+        if (!isTerminalIssueRun(participantLatestRun)) {
           if (!agentInvokable) {
             const updated = await escalateStrandedAssignedIssue({
               issue,
