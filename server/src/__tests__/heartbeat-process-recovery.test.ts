@@ -9208,6 +9208,92 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     });
   });
 
+  async function seedReviewStageWithoutParticipantRun(submitterRunStatus: "succeeded" | "running") {
+    const fixture = await seedInReviewParticipantRunFixture();
+    const { companyId, runId, wakeupRequestId, issueId } = fixture;
+    const submitterAgentId = randomUUID();
+    const finished = submitterRunStatus === "succeeded";
+    const finishedAt = new Date("2026-03-19T00:05:00.000Z");
+
+    await db.insert(agents).values({
+      id: submitterAgentId,
+      companyId,
+      name: "CodexImplementor",
+      role: "engineer",
+      status: finished ? "idle" : "running",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    // The only issue run belongs to the submitter; the reviewer never ran
+    // because its first review-stage wake was dropped.
+    await db
+      .update(heartbeatRuns)
+      .set({
+        agentId: submitterAgentId,
+        status: submitterRunStatus,
+        startedAt: new Date("2026-03-19T00:00:00.000Z"),
+        finishedAt: finished ? finishedAt : null,
+        updatedAt: finishedAt,
+      })
+      .where(eq(heartbeatRuns.id, runId));
+    await db
+      .update(agentWakeupRequests)
+      .set({
+        agentId: submitterAgentId,
+        status: finished ? "completed" : "claimed",
+        finishedAt: finished ? finishedAt : null,
+        updatedAt: finishedAt,
+      })
+      .where(eq(agentWakeupRequests.id, wakeupRequestId));
+    if (finished) {
+      await db
+        .update(issues)
+        .set({ executionRunId: null, executionAgentNameKey: null, executionLockedAt: null })
+        .where(eq(issues.id, issueId));
+    }
+    return fixture;
+  }
+
+  it("re-enqueues a pending execution-review participant that never received a run", async () => {
+    const { agentId, issueId, stageId } =
+      await seedReviewStageWithoutParticipantRun("succeeded");
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.reviewParticipantRequeued).toBe(1);
+    expect(result.escalated).toBe(0);
+    expect(result.issueIds).toEqual([issueId]);
+
+    const reviewerRuns = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(reviewerRuns).toHaveLength(1);
+    expect(reviewerRuns[0]?.contextSnapshot).toMatchObject({
+      issueId,
+      retryReason: "execution_review_participant_recovery",
+      currentStageId: stageId,
+      currentStageType: "review",
+    });
+  });
+
+  it("does not recover a review participant with no run while the submitting run is still active", async () => {
+    const { agentId } = await seedReviewStageWithoutParticipantRun("running");
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.reviewParticipantRequeued).toBe(0);
+    expect(result.escalated).toBe(0);
+
+    const reviewerRuns = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(reviewerRuns).toHaveLength(0);
+  });
+
   it("re-enqueues a stranded execution-review participant when another agent has a queued issue wake", async () => {
     const { companyId, agentId, issueId, runId, wakeupRequestId } =
       await seedInReviewParticipantRunFixture();
