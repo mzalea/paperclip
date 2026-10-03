@@ -40,6 +40,12 @@ Runtime fixes (ours, with regression tests):
 - `feat(codex-local)`: optional `quotaReservePercent` — defer runs as
   `provider_quota` until the window resets once any Codex quota window reaches
   the reserve line. Off unless set in the agent's adapter config.
+- `feat(costs)`: report what usage would have cost at API rates
+  (`apiEquivalentCents`) beside billed spend, so subscription runs no longer
+  read as $0. Read-side only (no migration, budgets unchanged). Reference
+  prices live in `server/src/services/api-equivalent-pricing.ts`; update them
+  by hand (gpt-5.6-sol is at its promo rate until 2026-11-21). Overlaps
+  upstream #339 / #6843; drop if upstream ships a shadow cost.
 
 Unmerged upstream PRs, cherry-picked with their authors credited. Drop each
 commit once the PR lands in an upstream tag `local/main` is based on:

@@ -69,6 +69,14 @@ function BillerTabLabel({ biller, rows }: { biller: string; rows: CostByBiller[]
   );
 }
 
+function apiEquivalentLabel(row: { costCents: number; apiEquivalentCents: number; apiEquivalentUnpricedTokens: number }) {
+  if (row.apiEquivalentCents === row.costCents && row.apiEquivalentUnpricedTokens === 0) return null;
+  const unpriced = row.apiEquivalentUnpricedTokens > 0
+    ? ` + ${formatTokens(row.apiEquivalentUnpricedTokens)} unpriced tok`
+    : "";
+  return `≈ ${formatCents(row.apiEquivalentCents)} at API rates${unpriced}`;
+}
+
 function MetricTile({
   label,
   value,
@@ -585,7 +593,10 @@ export function Costs() {
             <MetricTile
               label="Inference spend"
               value={formatCents(spendData?.summary.spendCents ?? 0)}
-              subtitle={`${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`}
+              subtitle={[
+                `${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`,
+                spendData ? apiEquivalentLabel({ costCents: spendData.summary.spendCents, ...spendData.summary }) : null,
+              ].filter(Boolean).join(" · ")}
               icon={DollarSign}
             />
             <MetricTile
@@ -748,6 +759,9 @@ export function Costs() {
                               </div>
                               <div className="text-right text-sm tabular-nums">
                                 <div className="font-medium">{formatCents(row.costCents)}</div>
+                                {apiEquivalentLabel(row) ? (
+                                  <div className="text-xs text-muted-foreground">{apiEquivalentLabel(row)}</div>
+                                ) : null}
                                 <div className="text-xs text-muted-foreground">
                                   in {formatTokens(row.inputTokens + row.cachedInputTokens)} · out {formatTokens(row.outputTokens)}
                                 </div>
@@ -787,6 +801,9 @@ export function Costs() {
                                           {formatCents(modelRow.costCents)}
                                           <span className="ml-1 font-normal text-muted-foreground">({sharePct}%)</span>
                                         </div>
+                                        {apiEquivalentLabel(modelRow) ? (
+                                          <div className="text-muted-foreground">{apiEquivalentLabel(modelRow)}</div>
+                                        ) : null}
                                         <div className="text-muted-foreground">
                                           {formatTokens(modelRow.inputTokens + modelRow.cachedInputTokens + modelRow.outputTokens)} tok
                                         </div>

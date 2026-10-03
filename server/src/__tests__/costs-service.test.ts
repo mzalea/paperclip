@@ -473,6 +473,81 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(agent?.spentMonthlyCents).toBe(0);
   });
 
+  it("reports what subscription usage would have cost at API rates", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const reportedRunId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Mixed Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(heartbeatRuns).values({
+      id: reportedRunId,
+      companyId,
+      agentId,
+      invocationSource: "on_demand",
+      status: "completed",
+      usageJson: { costUsd: 9.99, cacheAdjustedCostUsd: 1.25 },
+    });
+
+    const occurredAt = new Date("2026-04-10T00:00:00.000Z");
+    await db.insert(costEvents).values([
+      // billed: counts at its billed cost
+      {
+        companyId, agentId, provider: "anthropic", biller: "anthropic", billingType: "metered_api",
+        model: "claude-sonnet-5", inputTokens: 10, cachedInputTokens: 0, outputTokens: 10, costCents: 300, occurredAt,
+      },
+      // subscription with a reported cost: counts at the run's cache-adjusted cost, not its tokens
+      {
+        companyId, agentId, heartbeatRunId: reportedRunId, provider: "anthropic", biller: "anthropic",
+        billingType: "subscription_included", model: "claude-sonnet-5",
+        inputTokens: 50_000_000, cachedInputTokens: 0, outputTokens: 0, costCents: 0, occurredAt,
+      },
+      // subscription without a reported cost: priced from tokens ($4 + $3.60 + $20)
+      {
+        companyId, agentId, provider: "openai", biller: "chatgpt", billingType: "subscription_included",
+        model: "gpt-5.6-sol", inputTokens: 10_000_000, cachedInputTokens: 9_000_000, outputTokens: 1_000_000,
+        costCents: 0, occurredAt,
+      },
+      // subscription with no reported cost and no reference price: surfaced as unpriced
+      {
+        companyId, agentId, provider: "openai", biller: "chatgpt", billingType: "subscription_included",
+        model: "unknown", inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, costCents: 0, occurredAt,
+      },
+    ]);
+
+    const summary = await costs.summary(companyId);
+    expect(summary.spendCents).toBe(300);
+    expect(summary.apiEquivalentCents).toBe(300 + 125 + 2760);
+    expect(summary.apiEquivalentUnpricedTokens).toBe(125);
+
+    const [byAgentRow] = await costs.byAgent(companyId);
+    expect(byAgentRow?.apiEquivalentCents).toBe(3185);
+    expect(byAgentRow?.apiEquivalentUnpricedTokens).toBe(125);
+
+    const byModel = new Map(
+      (await costs.byAgentModel(companyId)).map((row) => [`${row.billingType}:${row.model}`, row]),
+    );
+    expect(byModel.get("metered_api:claude-sonnet-5")?.apiEquivalentCents).toBe(300);
+    expect(byModel.get("subscription_included:claude-sonnet-5")?.apiEquivalentCents).toBe(125);
+    expect(byModel.get("subscription_included:gpt-5.6-sol")?.apiEquivalentCents).toBe(2760);
+    expect(byModel.get("subscription_included:unknown")?.apiEquivalentUnpricedTokens).toBe(125);
+  });
+
   it("aggregates cost event sums above int32 without raising Postgres integer overflow", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

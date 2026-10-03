@@ -4,6 +4,7 @@ import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
+import { priceTokensUsd } from "./api-equivalent-pricing.js";
 import { budgetService, type BudgetServiceHooks } from "./budgets.js";
 import { visibleIssueCondition } from "./issue-visibility.js";
 
@@ -48,6 +49,82 @@ async function getMonthlySpendTotal(
     .from(costEvents)
     .where(and(...conditions));
   return Number(row?.total ?? 0);
+}
+
+interface ApiEquivalentTotals {
+  /** what the usage would have cost at metered API rates (billed cost included) */
+  apiEquivalentCents: number;
+  /** subscription tokens with no reported cost and no reference price */
+  apiEquivalentUnpricedTokens: number;
+}
+
+function emptyApiEquivalent(): ApiEquivalentTotals {
+  return { apiEquivalentCents: 0, apiEquivalentUnpricedTokens: 0 };
+}
+
+function addApiEquivalent(target: ApiEquivalentTotals, source: ApiEquivalentTotals) {
+  target.apiEquivalentCents += source.apiEquivalentCents;
+  target.apiEquivalentUnpricedTokens += source.apiEquivalentUnpricedTokens;
+}
+
+function apiEquivalentGroupKey(row: { agentId: string; provider: string; biller: string; billingType: string; model: string }) {
+  return [row.agentId, row.provider, row.biller, row.billingType, row.model].join("\u0000");
+}
+
+// Billed events count at their billed cost. Subscription events count at the
+// run's own reported costUsd when the adapter supplied one (Claude Code does),
+// otherwise at reference API prices for their tokens.
+async function apiEquivalentGroups(db: Db, companyId: string, range?: CostDateRange) {
+  const conditions: ReturnType<typeof eq>[] = [eq(costEvents.companyId, companyId)];
+  if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
+  if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
+
+  const isSubscription = sql`${costEvents.billingType} in (${sql.join(SUBSCRIPTION_BILLING_TYPES.map((value) => sql`${value}`), sql`, `)})`;
+  const reportedUsd = sql`case
+    when jsonb_typeof(${heartbeatRuns.usageJson}->'cacheAdjustedCostUsd') = 'number' then (${heartbeatRuns.usageJson}->>'cacheAdjustedCostUsd')::double precision
+    when jsonb_typeof(${heartbeatRuns.usageJson}->'costUsd') = 'number' then (${heartbeatRuns.usageJson}->>'costUsd')::double precision
+  end`;
+  const unreportedSum = (column: typeof costEvents.inputTokens | typeof costEvents.cachedInputTokens | typeof costEvents.outputTokens) =>
+    sql<number>`coalesce(sum(case when ${isSubscription} and (${reportedUsd}) is null then ${column} else 0 end), 0)::double precision`;
+
+  const rows = await db
+    .select({
+      agentId: costEvents.agentId,
+      provider: costEvents.provider,
+      biller: costEvents.biller,
+      billingType: costEvents.billingType,
+      model: costEvents.model,
+      billedCents: sumAsNumber(costEvents.costCents),
+      reportedUsd: sql<number>`coalesce(sum(case when ${isSubscription} then ${reportedUsd} end), 0)::double precision`,
+      unreportedInputTokens: unreportedSum(costEvents.inputTokens),
+      unreportedCachedInputTokens: unreportedSum(costEvents.cachedInputTokens),
+      unreportedOutputTokens: unreportedSum(costEvents.outputTokens),
+    })
+    .from(costEvents)
+    .leftJoin(heartbeatRuns, eq(costEvents.heartbeatRunId, heartbeatRuns.id))
+    .where(and(...conditions))
+    .groupBy(costEvents.agentId, costEvents.provider, costEvents.biller, costEvents.billingType, costEvents.model);
+
+  const groups = new Map<string, ApiEquivalentTotals & { agentId: string }>();
+  for (const row of rows) {
+    const unreported = {
+      inputTokens: Number(row.unreportedInputTokens),
+      cachedInputTokens: Number(row.unreportedCachedInputTokens),
+      outputTokens: Number(row.unreportedOutputTokens),
+    };
+    const pricedUsd = priceTokensUsd(row.model, unreported);
+    const totals: ApiEquivalentTotals = {
+      apiEquivalentCents: Math.round(
+        Number(row.billedCents) + (Number(row.reportedUsd) + (pricedUsd ?? 0)) * 100,
+      ),
+      apiEquivalentUnpricedTokens:
+        pricedUsd === null
+          ? unreported.inputTokens + unreported.cachedInputTokens + unreported.outputTokens
+          : 0,
+    };
+    groups.set(apiEquivalentGroupKey(row), { agentId: row.agentId, ...totals });
+  }
+  return groups;
 }
 
 export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
@@ -124,6 +201,10 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .where(and(...conditions));
 
       const spendCents = Number(total);
+      const apiEquivalent = emptyApiEquivalent();
+      for (const group of (await apiEquivalentGroups(db, companyId, range)).values()) {
+        addApiEquivalent(apiEquivalent, group);
+      }
       const utilization =
         company.budgetMonthlyCents > 0
           ? (spendCents / company.budgetMonthlyCents) * 100
@@ -134,6 +215,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         spendCents,
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
+        ...apiEquivalent,
       };
     },
 
@@ -309,9 +391,20 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .where(and(...conditions))
         .groupBy(costEvents.agentId, agents.name, agents.appearance, agents.status)
         .orderBy(desc(sumAsNumber(costEvents.costCents)));
+      const apiEquivalentByAgent = new Map<string, ApiEquivalentTotals>();
+      for (const group of (await apiEquivalentGroups(db, companyId, range)).values()) {
+        const totals = apiEquivalentByAgent.get(group.agentId) ?? emptyApiEquivalent();
+        addApiEquivalent(totals, group);
+        apiEquivalentByAgent.set(group.agentId, totals);
+      }
       return rows.map(row => {
         const appearance = resolveAgentAppearance(row.agentAppearance, row.agentId);
-        return { ...row, agentAppearance: appearance, avatarUrl: agentAvatarUrl(appearance, 512) };
+        return {
+          ...row,
+          ...(apiEquivalentByAgent.get(row.agentId) ?? emptyApiEquivalent()),
+          agentAppearance: appearance,
+          avatarUrl: agentAvatarUrl(appearance, 512),
+        };
       });
     },
 
@@ -464,9 +557,16 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
           costEvents.model,
         )
         .orderBy(costEvents.provider, costEvents.biller, costEvents.billingType, costEvents.model);
+      const apiEquivalent = await apiEquivalentGroups(db, companyId, range);
       return rows.map(row => {
         const appearance = resolveAgentAppearance(row.agentAppearance, row.agentId);
-        return { ...row, agentAppearance: appearance, avatarUrl: agentAvatarUrl(appearance, 512) };
+        const totals = apiEquivalent.get(apiEquivalentGroupKey(row)) ?? emptyApiEquivalent();
+        return {
+          ...row,
+          ...totals,
+          agentAppearance: appearance,
+          avatarUrl: agentAvatarUrl(appearance, 512),
+        };
       });
     },
 

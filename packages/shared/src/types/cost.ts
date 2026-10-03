@@ -28,6 +28,10 @@ export interface CostSummary {
   spendCents: number;
   budgetCents: number;
   utilizationPercent: number;
+  /** what this usage would have cost at metered API rates; equals costCents for billed usage */
+  apiEquivalentCents: number;
+  /** subscription tokens with neither a reported cost nor a reference price */
+  apiEquivalentUnpricedTokens: number;
 }
 
 export interface IssueCostSummary {
@@ -60,6 +64,10 @@ export interface CostByAgent {
   subscriptionCachedInputTokens: number;
   subscriptionInputTokens: number;
   subscriptionOutputTokens: number;
+  /** what this usage would have cost at metered API rates; equals costCents for billed usage */
+  apiEquivalentCents: number;
+  /** subscription tokens with neither a reported cost nor a reference price */
+  apiEquivalentUnpricedTokens: number;
 }
 
 export interface CostByProviderModel {
@@ -107,6 +115,10 @@ export interface CostByAgentModel {
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
+  /** what this usage would have cost at metered API rates; equals costCents for billed usage */
+  apiEquivalentCents: number;
+  /** subscription tokens with neither a reported cost nor a reference price */
+  apiEquivalentUnpricedTokens: number;
 }
 
 /** spend per provider for a fixed rolling time window */
