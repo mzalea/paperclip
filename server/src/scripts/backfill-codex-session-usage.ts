@@ -72,7 +72,7 @@ function isUnknownModel(model: unknown): boolean {
   return typeof model !== "string" || UNKNOWN_MODELS.has(model.trim().toLowerCase());
 }
 
-type CostRow = { model: string; occurredAt: Date; tokens: Totals };
+type CostRow = { agentId: string; model: string; occurredAt: Date; tokens: Totals };
 
 export type CodexUsageRun = {
   id: string;
@@ -157,19 +157,29 @@ export function planCodexUsageRewrites(
   return { rewrites, unresolvedUnknownModels };
 }
 
+// Priced per (agent, model) like the Costs API's apiEquivalentGroups, so the
+// totals here match the API: pricing clamps uncached input per group, which
+// matters for ACP-lane rows whose cached tokens are not part of input.
 function report(label: string, rows: Iterable<CostRow>, from: Date) {
-  const byModel = new Map<string, Totals>();
+  const byAgentModel = new Map<string, Totals>();
+  const byModel = new Map<string, { tokens: Totals; usd: number | null }>();
   let unknownRows = 0;
   for (const row of rows) {
     if (row.occurredAt < from) continue;
     if (isUnknownModel(row.model)) unknownRows += 1;
-    byModel.set(row.model, add(byModel.get(row.model) ?? EMPTY, row.tokens));
+    const key = `${row.agentId}\u0000${row.model}`;
+    byAgentModel.set(key, add(byAgentModel.get(key) ?? EMPTY, row.tokens));
+  }
+  for (const [key, tokens] of byAgentModel) {
+    const model = key.slice(key.indexOf("\u0000") + 1);
+    const usd = priceTokensUsd(model, tokens);
+    const entry = byModel.get(model) ?? { tokens: EMPTY, usd: null };
+    byModel.set(model, { tokens: add(entry.tokens, tokens), usd: usd === null ? entry.usd : (entry.usd ?? 0) + usd });
   }
   let totalUsd = 0;
   let unpriced = 0;
   console.log(`  ${label} (cost events since ${from.toISOString()}):`);
-  for (const [model, tokens] of [...byModel.entries()].sort()) {
-    const usd = priceTokensUsd(model, tokens);
+  for (const [model, { tokens, usd }] of [...byModel.entries()].sort()) {
     if (usd === null) unpriced += tokens.inputTokens + tokens.cachedInputTokens + tokens.outputTokens;
     else totalUsd += usd;
     console.log(
@@ -218,6 +228,7 @@ async function main() {
       .select({
         id: costEvents.id,
         heartbeatRunId: costEvents.heartbeatRunId,
+        agentId: costEvents.agentId,
         model: costEvents.model,
         occurredAt: costEvents.occurredAt,
         inputTokens: costEvents.inputTokens,
@@ -231,6 +242,7 @@ async function main() {
     for (const row of eventRows) {
       const entry = {
         id: row.id,
+        agentId: row.agentId,
         model: row.model,
         occurredAt: row.occurredAt,
         tokens: { inputTokens: row.inputTokens, cachedInputTokens: row.cachedInputTokens, outputTokens: row.outputTokens },
