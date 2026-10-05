@@ -49,6 +49,19 @@ Runtime fixes (ours, with regression tests):
   Settings → General → "Show costs at API rates" (`showApiEquivalentCosts`,
   off by default) makes that figure the headline on the dashboard and Costs
   page, with billed spend as the footnote.
+- `fix(costs)`: Codex `turn.completed.usage` is the thread's cumulative total,
+  and the CLI lane recorded it per run, so resumed sessions were overcounted
+  about 4x (upstream #14875). CLI-lane results now declare
+  `usageBasis: "session_cumulative"` and the server stores the per-run delta
+  (raw totals stay in `usage_json.raw*`, which session compaction reads),
+  walking back past runs that recorded no usage. The ACP lane reports per-run
+  usage and is unchanged. Codex runs without `adapterConfig.model` now report
+  the managed `config.toml` model (alias-normalized) instead of `unknown`, and
+  `subscription_overage` runs no longer count their cost twice at API rates.
+  `pnpm codex-usage:backfill [--company ID] [--model ID] [--dry-run]` rewrites
+  existing `heartbeat_runs.usage_json`, `cost_events` tokens/model and
+  `agent_runtime_state` totals from the raw totals (idempotent; run
+  `pnpm db:backup` first). Applied to the October 2026 data on 2026-10-05.
 
 Unmerged upstream PRs, cherry-picked with their authors credited. Drop each
 commit once the PR lands in an upstream tag `local/main` is based on:

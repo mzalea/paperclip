@@ -548,6 +548,37 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(byModel.get("subscription_included:unknown")?.apiEquivalentUnpricedTokens).toBe(125);
   });
 
+  it("counts a subscription_overage run's reported cost once at API rates", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId, companyId, name: "Coder", role: "engineer", status: "active",
+      adapterType: "claude_local", adapterConfig: {}, runtimeConfig: {}, permissions: {},
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId, companyId, agentId, invocationSource: "on_demand", status: "completed",
+      usageJson: { costUsd: 0.5 },
+    });
+    await db.insert(costEvents).values({
+      companyId, agentId, heartbeatRunId: runId, provider: "anthropic", biller: "anthropic",
+      billingType: "subscription_overage", model: "claude-sonnet-5",
+      inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 0, costCents: 50,
+      occurredAt: new Date("2026-04-10T00:00:00.000Z"),
+    });
+
+    const summary = await costs.summary(companyId);
+    expect(summary.spendCents).toBe(50);
+    expect(summary.apiEquivalentCents).toBe(50);
+    expect(summary.apiEquivalentUnpricedTokens).toBe(0);
+  });
+
   it("aggregates cost event sums above int32 without raising Postgres integer overflow", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

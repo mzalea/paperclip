@@ -45,6 +45,8 @@ import { copyBackCodexAuth } from "./codex-auth-copyback.js";
 import { buildCodexAuthInboundProvision } from "./codex-auth-merge-scripts.js";
 import {
   evaluateCodexCredentialReadiness,
+  readCodexConfigModel,
+  resolveManagedCodexHomeDir,
   resolveSharedCodexHomeDir,
   stageCodexHomeForSync,
 } from "./codex-home.js";
@@ -354,6 +356,29 @@ export function resolveCodexAcpBillingIdentity(
   return { provider: "openai", biller, billingType };
 }
 
+/**
+ * The ACPX engine only reports the model it was asked for, so a Codex agent
+ * without `adapterConfig.model` comes back with none and its cost rows cannot
+ * be priced. Fill it from the (alias-normalized) ACP config, else from the
+ * default in the Codex home's config.toml that Codex itself falls back to.
+ * Nothing resolvable leaves the result untouched (unpriced, never guessed).
+ */
+export async function withCodexAcpReportedModel(
+  result: AdapterExecutionResult,
+  acpConfig: Record<string, unknown>,
+  companyId: string,
+): Promise<AdapterExecutionResult> {
+  if (isNonEmpty(result.model)) return result;
+  const configured = normalizeCodexModel(typeof acpConfig.model === "string" ? acpConfig.model : "");
+  if (configured) return { ...result, model: configured };
+  const env = parseObject(acpConfig.env);
+  const codexHome = isNonEmpty(env.CODEX_HOME)
+    ? env.CODEX_HOME
+    : resolveManagedCodexHomeDir(process.env, companyId);
+  const model = normalizeCodexModel(await readCodexConfigModel(codexHome));
+  return model ? { ...result, model } : result;
+}
+
 export function createCodexAcpExecutor(options: CodexAcpExecutorOptions = {}): CodexAcpExecutor {
   let executor: CodexAcpExecutor | null = null;
   return async (ctx) => {
@@ -363,11 +388,18 @@ export function createCodexAcpExecutor(options: CodexAcpExecutorOptions = {}): C
       currentExecutor = createAcpxEngineExecutor(withCodexAcpDefaults(options));
       executor = currentExecutor;
     }
-    const result = await currentExecutor({
-      ...ctx,
-      config: buildCodexAcpConfig(ctx.config),
-    });
-    return withCodexAuthRefreshFailureClassification(result);
+    const acpConfig = buildCodexAcpConfig(ctx.config);
+    const result = await currentExecutor({ ...ctx, config: acpConfig });
+    let reported = result;
+    try {
+      reported = await withCodexAcpReportedModel(result, acpConfig, ctx.agent.companyId);
+    } catch (error) {
+      // The run already finished; an unreadable config.toml only costs the
+      // model name (the row shows as unpriced), so report it and keep the result.
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.onLog("stderr", `[paperclip] could not resolve the Codex model for cost reporting: ${message}\n`);
+    }
+    return withCodexAuthRefreshFailureClassification(reported);
   };
 }
 

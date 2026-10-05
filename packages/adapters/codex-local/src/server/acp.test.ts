@@ -30,6 +30,7 @@ import {
   resolveCodexExecutionEngine,
   resolveCodexExecutionEngineForRun,
   testCodexAcpEnvironment,
+  withCodexAcpReportedModel,
 } from "./acp.js";
 
 // A local stand-in for a sandbox runner: runs the managed-runtime staging
@@ -1469,5 +1470,32 @@ describe("resolveCodexAcpBillingIdentity", () => {
         executionTarget: { kind: "remote", transport: "sandbox", remoteCwd: "/work" },
       } as never).billingType,
     ).toBe("subscription");
+  });
+});
+
+describe("withCodexAcpReportedModel", () => {
+  const baseResult = { exitCode: 0, signal: null, timedOut: false, resultJson: {} };
+
+  it("keeps a model the engine already reported", async () => {
+    const result = await withCodexAcpReportedModel({ ...baseResult, model: "gpt-6-astra" }, { model: "gpt-5.6-sol" }, "company-1");
+    expect(result.model).toBe("gpt-6-astra");
+  });
+
+  it("fills the alias-normalized configured model", async () => {
+    const result = await withCodexAcpReportedModel({ ...baseResult, model: null }, { model: "gpt-5.6" }, "company-1");
+    expect(result.model).toBe("gpt-5.6-sol");
+  });
+
+  it("falls back to the Codex home's config.toml default", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-acp-model-"));
+    await fs.writeFile(path.join(home, "config.toml"), 'model = "gpt-5.6-sol"\n', "utf8");
+    const result = await withCodexAcpReportedModel({ ...baseResult }, { env: { CODEX_HOME: home } }, "company-1");
+    expect(result.model).toBe("gpt-5.6-sol");
+  });
+
+  it("leaves the result untouched when nothing resolves", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-acp-model-"));
+    const result = await withCodexAcpReportedModel({ ...baseResult }, { env: { CODEX_HOME: home } }, "company-1");
+    expect(result.model).toBeUndefined();
   });
 });

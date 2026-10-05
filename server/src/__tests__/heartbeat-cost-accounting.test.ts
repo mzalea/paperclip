@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  deriveNormalizedUsageDelta,
+  readRawUsageTotals,
   resolveCacheAdjustedCostUsd,
   resolveLedgerCostStatus,
 } from "../services/heartbeat.js";
@@ -84,5 +86,38 @@ describe("heartbeat cost accounting", () => {
       costUsd: 3.1,
       cacheAdjustedCostUsd: 1.5,
     })).toBe(1.5);
+  });
+});
+
+describe("session-cumulative usage deltas", () => {
+  it("subtracts the previous run's session totals field by field", () => {
+    expect(deriveNormalizedUsageDelta(
+      { inputTokens: 250, cachedInputTokens: 60, outputTokens: 30 },
+      { inputTokens: 100, cachedInputTokens: 20, outputTokens: 10 },
+    )).toEqual({ inputTokens: 150, cachedInputTokens: 40, outputTokens: 20 });
+  });
+
+  it("counts the full current value when a counter went backwards (session reset)", () => {
+    expect(deriveNormalizedUsageDelta(
+      { inputTokens: 50, cachedInputTokens: 5, outputTokens: 40 },
+      { inputTokens: 100, cachedInputTokens: 20, outputTokens: 10 },
+    )).toEqual({ inputTokens: 50, cachedInputTokens: 5, outputTokens: 30 });
+  });
+
+  it("counts the full current value on the first run of a session", () => {
+    expect(deriveNormalizedUsageDelta({ inputTokens: 100, cachedInputTokens: 20, outputTokens: 10 }, null))
+      .toEqual({ inputTokens: 100, cachedInputTokens: 20, outputTokens: 10 });
+    expect(deriveNormalizedUsageDelta(null, null)).toBeNull();
+  });
+
+  it("reads the raw session totals ahead of the normalized ones and ignores empty usage", () => {
+    expect(readRawUsageTotals({
+      inputTokens: 150, cachedInputTokens: 40, outputTokens: 20,
+      rawInputTokens: 250, rawCachedInputTokens: 60, rawOutputTokens: 30,
+    })).toEqual({ inputTokens: 250, cachedInputTokens: 60, outputTokens: 30 });
+    expect(readRawUsageTotals({ inputTokens: 7, cachedInputTokens: 0, outputTokens: 1 }))
+      .toEqual({ inputTokens: 7, cachedInputTokens: 0, outputTokens: 1 });
+    expect(readRawUsageTotals({ model: "gpt-5.6-sol" })).toBeNull();
+    expect(readRawUsageTotals(null)).toBeNull();
   });
 });

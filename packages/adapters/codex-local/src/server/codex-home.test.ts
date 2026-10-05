@@ -10,6 +10,7 @@ import {
   mergeManagedCodexMcpGateways,
   isManagedCodexHomePath,
   prepareManagedCodexHome,
+  readCodexConfigModel,
   reconcileManagedCodexHome,
   seedManagedCodexHome,
   stageCodexHomeForSync,
@@ -1409,5 +1410,28 @@ describe("stageCodexHomeForSync", () => {
       if (staged) await fs.rm(staged, { recursive: true, force: true });
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("readCodexConfigModel", () => {
+  async function homeWithConfig(contents: string | null): Promise<string> {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-config-model-"));
+    if (contents !== null) await fs.writeFile(path.join(home, "config.toml"), contents, "utf8");
+    return home;
+  }
+
+  it("returns the top-level model", async () => {
+    const home = await homeWithConfig('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "low"\n');
+    expect(await readCodexConfigModel(home)).toBe("gpt-5.6-sol");
+  });
+
+  it("ignores a model key scoped to a table", async () => {
+    const home = await homeWithConfig('approval_policy = "never"\n\n[model_providers.custom]\nmodel = "other"\n');
+    expect(await readCodexConfigModel(home)).toBeNull();
+  });
+
+  it("returns null when the config file is missing", async () => {
+    const home = await homeWithConfig(null);
+    expect(await readCodexConfigModel(home)).toBeNull();
   });
 });

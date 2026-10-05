@@ -71,21 +71,24 @@ function apiEquivalentGroupKey(row: { agentId: string; provider: string; biller:
   return [row.agentId, row.provider, row.biller, row.billingType, row.model].join("\u0000");
 }
 
-// Billed events count at their billed cost. Subscription events count at the
-// run's own reported costUsd when the adapter supplied one (Claude Code does),
-// otherwise at reference API prices for their tokens.
+// Billed events count at their billed cost. Events billed as
+// subscription_included (the only billing type stored with cost_cents = 0, see
+// normalizeBilledCostCents) count at the run's own reported costUsd when the
+// adapter supplied one (Claude Code does), otherwise at reference API prices
+// for their tokens. subscription_overage already carries its cost in
+// cost_cents, so it must not be added again here.
 async function apiEquivalentGroups(db: Db, companyId: string, range?: CostDateRange) {
   const conditions: ReturnType<typeof eq>[] = [eq(costEvents.companyId, companyId)];
   if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
   if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
 
-  const isSubscription = sql`${costEvents.billingType} in (${sql.join(SUBSCRIPTION_BILLING_TYPES.map((value) => sql`${value}`), sql`, `)})`;
+  const isUnbilledSubscription = sql`${costEvents.billingType} = 'subscription_included'`;
   const reportedUsd = sql`case
     when jsonb_typeof(${heartbeatRuns.usageJson}->'cacheAdjustedCostUsd') = 'number' then (${heartbeatRuns.usageJson}->>'cacheAdjustedCostUsd')::double precision
     when jsonb_typeof(${heartbeatRuns.usageJson}->'costUsd') = 'number' then (${heartbeatRuns.usageJson}->>'costUsd')::double precision
   end`;
   const unreportedSum = (column: typeof costEvents.inputTokens | typeof costEvents.cachedInputTokens | typeof costEvents.outputTokens) =>
-    sql<number>`coalesce(sum(case when ${isSubscription} and (${reportedUsd}) is null then ${column} else 0 end), 0)::double precision`;
+    sql<number>`coalesce(sum(case when ${isUnbilledSubscription} and (${reportedUsd}) is null then ${column} else 0 end), 0)::double precision`;
 
   const rows = await db
     .select({
@@ -95,7 +98,7 @@ async function apiEquivalentGroups(db: Db, companyId: string, range?: CostDateRa
       billingType: costEvents.billingType,
       model: costEvents.model,
       billedCents: sumAsNumber(costEvents.costCents),
-      reportedUsd: sql<number>`coalesce(sum(case when ${isSubscription} then ${reportedUsd} end), 0)::double precision`,
+      reportedUsd: sql<number>`coalesce(sum(case when ${isUnbilledSubscription} then ${reportedUsd} end), 0)::double precision`,
       unreportedInputTokens: unreportedSum(costEvents.inputTokens),
       unreportedCachedInputTokens: unreportedSum(costEvents.cachedInputTokens),
       unreportedOutputTokens: unreportedSum(costEvents.outputTokens),

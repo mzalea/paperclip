@@ -72,6 +72,10 @@ export function parseCodexJsonl(stdout: string) {
     }
 
     if (type === "turn.completed") {
+      // `codex exec --json` reports the thread's running totals here, not the
+      // turn's own tokens: a resumed thread includes every earlier turn. The
+      // server deltas consecutive runs of the same thread when the basis is
+      // session_cumulative (see usageBasis below; upstream #14875).
       const usageObj = parseObject(event.usage);
       usage.inputTokens = asNumber(usageObj.input_tokens, usage.inputTokens);
       usage.cachedInputTokens = asNumber(usageObj.cached_input_tokens, usage.cachedInputTokens);
@@ -90,7 +94,7 @@ export function parseCodexJsonl(stdout: string) {
     sessionId,
     summary: finalMessage?.trim() ?? "",
     usage,
-    usageBasis: "per_run" as const,
+    usageBasis: "session_cumulative" as const,
     errorMessage,
     sawProtocolEvent,
     sawProtocolTerminalEvent,

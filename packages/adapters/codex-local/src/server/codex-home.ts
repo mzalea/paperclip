@@ -126,6 +126,28 @@ function isWorktreeMode(env: NodeJS.ProcessEnv): boolean {
   return TRUTHY_ENV_RE.test(env.PAPERCLIP_IN_WORKTREE ?? "");
 }
 
+/**
+ * The default model from a Codex home's `config.toml` (top-level `model = "…"`,
+ * ignoring `[table]`-scoped keys). Codex runs without `adapterConfig.model`
+ * use this, so cost rows can name the model they should be priced at. Null when
+ * the file or key is absent.
+ */
+export async function readCodexConfigModel(codexHome: string): Promise<string | null> {
+  let contents: string;
+  try {
+    contents = await fs.readFile(path.join(codexHome, "config.toml"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  for (const line of contents.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) break;
+    const match = /^\s*model\s*=\s*"([^"]*)"/.exec(line);
+    if (match) return match[1].trim() || null;
+  }
+  return null;
+}
+
 export function resolveManagedCodexHomeDir(
   env: NodeJS.ProcessEnv,
   companyId?: string,

@@ -78,6 +78,7 @@ import {
   seedManagedCodexHome,
   stageCodexHomeForSync,
   mergeManagedCodexMcpGateways,
+  readCodexConfigModel,
   writeManagedCodexMcpConfig,
   type ManagedCodexMcpGateway,
 } from "./codex-home.js";
@@ -91,7 +92,7 @@ import { prepareCodexRuntimeConfig } from "./runtime-config.js";
 import { resolveCodexDesiredSkillNames } from "./skills.js";
 import { buildCodexExecArgs } from "./codex-args.js";
 import { createQuotaReserveGate } from "./quota-reserve.js";
-import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+import { SANDBOX_INSTALL_COMMAND, normalizeCodexModel } from "../index.js";
 import {
   CODEX_OUTPUT_INACTIVITY_MONITOR_SIGTERM_GRACE_MS,
   createCodexOutputInactivityMonitor,
@@ -715,6 +716,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const defaultCodexHome = resolveManagedCodexHomeDir(process.env, agent.companyId);
   const effectiveCodexHome = configuredCodexHome ?? defaultCodexHome;
   await fs.mkdir(effectiveCodexHome, { recursive: true });
+  // Report the model Codex actually runs with, so the run's cost rows can be
+  // priced: the alias-normalized configured model (what the args pass), else
+  // the managed home's config.toml default that Codex falls back to. Nothing
+  // resolvable stays null and surfaces as unpriced tokens rather than a guess.
+  const reportedModel =
+    normalizeCodexModel(model) ||
+    normalizeCodexModel(await readCodexConfigModel(effectiveCodexHome)) ||
+    null;
 
   // Never launch a managed CODEX_HOME with no credentials. Without auth.json
   // and with OPENAI_API_KEY="" the provider rejects every request with
@@ -1401,7 +1410,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           sessionDisplayId: null,
           provider: "openai",
           biller: resolveCodexBiller(effectiveEnv, billingType),
-          model,
+          model: reportedModel,
           billingType,
           costUsd: null,
           resultJson: {
@@ -1530,7 +1539,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         sessionDisplayId: resolvedSessionId,
         provider: "openai",
         biller: resolveCodexBiller(effectiveEnv, billingType),
-        model,
+        model: reportedModel,
         billingType,
         costUsd: null,
         resultJson: {

@@ -5420,7 +5420,7 @@ function normalizeUsageTotals(
   };
 }
 
-function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
+export function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
   const parsed = parseObject(usageJson);
   if (Object.keys(parsed).length === 0) return null;
 
@@ -5457,7 +5457,7 @@ function readRawUsageTotals(usageJson: unknown): UsageTotals | null {
   };
 }
 
-function deriveNormalizedUsageDelta(
+export function deriveNormalizedUsageDelta(
   current: UsageTotals | null,
   previous: UsageTotals | null,
 ): UsageTotals | null {
@@ -11135,7 +11135,11 @@ export function heartbeatService(
     if (opts?.excludeRunId) {
       conditions.push(sql`${heartbeatRuns.id} <> ${opts.excludeRunId}`);
     }
-    return db
+    // The caller deltas this run's cumulative session totals against the
+    // previous run's. A run that recorded no usage (timed out, crashed before
+    // its first turn) would make the next run count the whole session again,
+    // so walk back to the latest run that did record totals.
+    const rows = await db
       .select({
         id: heartbeatRuns.id,
         usageJson: heartbeatRuns.usageJson,
@@ -11143,8 +11147,8 @@ export function heartbeatService(
       .from(heartbeatRuns)
       .where(and(...conditions))
       .orderBy(desc(heartbeatRuns.createdAt))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
+      .limit(10);
+    return rows.find((row) => readRawUsageTotals(row.usageJson) !== null) ?? rows[0] ?? null;
   }
 
   const issueMonitorDispatchColumns = {
