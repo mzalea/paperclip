@@ -51,7 +51,7 @@ async function getMonthlySpendTotal(
   return Number(row?.total ?? 0);
 }
 
-interface ApiEquivalentTotals {
+export interface ApiEquivalentTotals {
   /** what the usage would have cost at metered API rates (billed cost included) */
   apiEquivalentCents: number;
   /** subscription tokens with no reported cost and no reference price */
@@ -125,6 +125,14 @@ async function apiEquivalentGroups(db: Db, companyId: string, range?: CostDateRa
     groups.set(apiEquivalentGroupKey(row), { agentId: row.agentId, ...totals });
   }
   return groups;
+}
+
+export async function apiEquivalentTotal(db: Db, companyId: string, range?: CostDateRange): Promise<ApiEquivalentTotals> {
+  const total = emptyApiEquivalent();
+  for (const group of (await apiEquivalentGroups(db, companyId, range)).values()) {
+    addApiEquivalent(total, group);
+  }
+  return total;
 }
 
 export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
@@ -201,10 +209,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .where(and(...conditions));
 
       const spendCents = Number(total);
-      const apiEquivalent = emptyApiEquivalent();
-      for (const group of (await apiEquivalentGroups(db, companyId, range)).values()) {
-        addApiEquivalent(apiEquivalent, group);
-      }
+      const apiEquivalent = await apiEquivalentTotal(db, companyId, range);
       const utilization =
         company.budgetMonthlyCents > 0
           ? (spendCents / company.budgetMonthlyCents) * 100

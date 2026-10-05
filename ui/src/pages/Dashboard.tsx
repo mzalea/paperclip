@@ -9,6 +9,7 @@ import { claimOnboardingOffer } from "../lib/onboarding-auto-open";
 import { Link } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { dashboardApi } from "../api/dashboard";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { activityApi } from "../api/activity";
 import { accessApi } from "../api/access";
 import { issuesApi } from "../api/issues";
@@ -27,6 +28,7 @@ import { usePublishSharedQueryData, useSharedPollingQuery } from "../hooks/useSh
 import { ActivityRow } from "../components/ActivityRow";
 import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
+import { spendDisplay } from "../lib/api-equivalent";
 import { SHOW_TASK_PRIORITY_UI } from "../lib/ui-flags";
 import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
@@ -204,6 +206,11 @@ export function Dashboard() {
     enabled: !!selectedCompanyId,
   });
 
+  const showApiEquivalent = useQuery({
+    queryKey: queryKeys.instance.generalSettings,
+    queryFn: () => instanceSettingsApi.getGeneral(),
+  }).data?.showApiEquivalentCosts === true;
+
   const userProfileMap = useMemo(
     () => buildCompanyUserProfileMap(companyMembers?.users),
     [companyMembers?.users],
@@ -319,6 +326,13 @@ export function Dashboard() {
   const pausedBanner = derivePausedAgentBanner(agents);
   const pausedImportedCount =
     pausedBanner?.kind === "imported" ? pausedBanner.pausedImportedAgentIds.length : 0;
+  const monthSpend = data
+    ? spendDisplay({
+      costCents: data.costs.monthSpendCents,
+      apiEquivalentCents: data.costs.monthApiEquivalentCents,
+      apiEquivalentUnpricedTokens: 0,
+    }, showApiEquivalent)
+    : { primaryCents: 0, note: null };
 
   return (
     <div className="space-y-6">
@@ -425,14 +439,17 @@ export function Dashboard() {
             />
             <MetricCard
               icon={DollarSign}
-              value={formatCents(data.costs.monthSpendCents)}
-              label="Month Spend"
+              value={formatCents(monthSpend.primaryCents)}
+              label={showApiEquivalent ? "Month Spend at API rates" : "Month Spend"}
               to="/costs"
               description={
                 <span>
-                  {data.costs.monthBudgetCents > 0
-                    ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
+                  {[
+                    showApiEquivalent ? monthSpend.note : null,
+                    data.costs.monthBudgetCents > 0
+                      ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
+                      : "Unlimited budget",
+                  ].filter(Boolean).join(" · ")}
                 </span>
               }
             />

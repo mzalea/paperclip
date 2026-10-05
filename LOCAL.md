@@ -46,6 +46,9 @@ Runtime fixes (ours, with regression tests):
   prices live in `server/src/services/api-equivalent-pricing.ts`; update them
   by hand (gpt-5.6-sol is at its promo rate until 2026-11-21). Overlaps
   upstream #339 / #6843; drop if upstream ships a shadow cost.
+  Settings → General → "Show costs at API rates" (`showApiEquivalentCosts`,
+  off by default) makes that figure the headline on the dashboard and Costs
+  page, with billed spend as the footnote.
 
 Unmerged upstream PRs, cherry-picked with their authors credited. Drop each
 commit once the PR lands in an upstream tag `local/main` is based on:

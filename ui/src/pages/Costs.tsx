@@ -13,6 +13,7 @@ import type {
 import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, Coins, DollarSign, ReceiptText } from "lucide-react";
 import { budgetsApi } from "../api/budgets";
 import { costsApi } from "../api/costs";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { BillerSpendCard } from "../components/BillerSpendCard";
 import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
@@ -28,6 +29,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useDateRange, PRESET_KEYS, PRESET_LABELS } from "../hooks/useDateRange";
+import { spendDisplay } from "../lib/api-equivalent";
 import { queryKeys } from "../lib/queryKeys";
 import { billingTypeDisplayName, cn, formatCents, formatTokens, providerDisplayName } from "../lib/utils";
 import { Button } from "@/components/ui/button";
@@ -78,14 +80,6 @@ function BillerTabLabel({ biller, rows }: { biller: string; rows: CostByBiller[]
       <span className="text-xs text-muted-foreground">{formatCents(totalCost)}</span>
     </span>
   );
-}
-
-function apiEquivalentLabel(row: { costCents: number; apiEquivalentCents: number; apiEquivalentUnpricedTokens: number }) {
-  if (row.apiEquivalentCents === row.costCents && row.apiEquivalentUnpricedTokens === 0) return null;
-  const unpriced = row.apiEquivalentUnpricedTokens > 0
-    ? ` + ${formatTokens(row.apiEquivalentUnpricedTokens)} unpriced tok`
-    : "";
-  return `≈ ${formatCents(row.apiEquivalentCents)} at API rates${unpriced}`;
 }
 
 function MetricTile({
@@ -258,6 +252,11 @@ export function Costs({
       budgetsApi.resolveIncident(companyId, input.incidentId, input),
     onSuccess: invalidateBudgetViews,
   });
+
+  const showApiEquivalent = useQuery({
+    queryKey: queryKeys.instance.generalSettings,
+    queryFn: () => instanceSettingsApi.getGeneral(),
+  }).data?.showApiEquivalentCosts === true;
 
   const { data: spendData, isLoading: spendLoading, error: spendError } = useQuery({
     queryKey: queryKeys.costs(companyId, from || undefined, to || undefined),
@@ -548,6 +547,9 @@ export function Costs({
       (sum, row) => sum + row.inputTokens + row.cachedInputTokens + row.outputTokens,
       0,
     );
+  const summarySpend = spendData
+    ? spendDisplay({ costCents: spendData.summary.spendCents, ...spendData.summary }, showApiEquivalent)
+    : null;
 
   const topFinanceEvents = (financeData?.events ?? []) as FinanceEvent[];
   const budgetPolicies = budgetData?.policies ?? [];
@@ -616,11 +618,11 @@ export function Costs({
 
           <div className="grid gap-3 lg:grid-cols-4">
             <MetricTile
-              label="Inference spend"
-              value={formatCents(spendData?.summary.spendCents ?? 0)}
+              label={showApiEquivalent ? "Inference spend at API rates" : "Inference spend"}
+              value={formatCents(summarySpend?.primaryCents ?? 0)}
               subtitle={[
                 `${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`,
-                spendData ? apiEquivalentLabel({ costCents: spendData.summary.spendCents, ...spendData.summary }) : null,
+                summarySpend?.note ?? null,
               ].filter(Boolean).join(" · ")}
               icon={DollarSign}
             />
@@ -767,6 +769,7 @@ export function Costs({
                       spendData?.byAgent.map((row) => {
                         const modelRows = agentModelRows.get(row.agentId) ?? [];
                         const isExpanded = expandedAgents.has(row.agentId);
+                        const agentSpend = spendDisplay(row, showApiEquivalent);
                         const hasBreakdown = modelRows.length > 0;
                         return (
                           <div key={row.agentId} className="border border-border px-4 py-3">
@@ -786,9 +789,9 @@ export function Costs({
                                 {row.agentStatus === "terminated" ? <StatusBadge status="terminated" /> : null}
                               </div>
                               <div className="text-right text-sm tabular-nums">
-                                <div className="font-medium">{formatCents(row.costCents)}</div>
-                                {apiEquivalentLabel(row) ? (
-                                  <div className="text-xs text-muted-foreground">{apiEquivalentLabel(row)}</div>
+                                <div className="font-medium">{formatCents(agentSpend.primaryCents)}</div>
+                                {agentSpend.note ? (
+                                  <div className="text-xs text-muted-foreground">{agentSpend.note}</div>
                                 ) : null}
                                 <div className="text-xs text-muted-foreground">
                                   in {formatTokens(row.inputTokens + row.cachedInputTokens)} · out {formatTokens(row.outputTokens)}
@@ -808,7 +811,10 @@ export function Costs({
                             {isExpanded && modelRows.length > 0 ? (
                               <div className="mt-3 space-y-2 border-l border-border pl-4">
                                 {modelRows.map((modelRow) => {
-                                  const sharePct = row.costCents > 0 ? Math.round((modelRow.costCents / row.costCents) * 100) : 0;
+                                  const modelSpend = spendDisplay(modelRow, showApiEquivalent);
+                                  const sharePct = agentSpend.primaryCents > 0
+                                    ? Math.round((modelSpend.primaryCents / agentSpend.primaryCents) * 100)
+                                    : 0;
                                   return (
                                     <div
                                       key={`${modelRow.provider}:${modelRow.model}:${modelRow.billingType}`}
@@ -826,11 +832,11 @@ export function Costs({
                                       </div>
                                       <div className="text-right tabular-nums">
                                         <div className="font-medium">
-                                          {formatCents(modelRow.costCents)}
+                                          {formatCents(modelSpend.primaryCents)}
                                           <span className="ml-1 font-normal text-muted-foreground">({sharePct}%)</span>
                                         </div>
-                                        {apiEquivalentLabel(modelRow) ? (
-                                          <div className="text-muted-foreground">{apiEquivalentLabel(modelRow)}</div>
+                                        {modelSpend.note ? (
+                                          <div className="text-muted-foreground">{modelSpend.note}</div>
                                         ) : null}
                                         <div className="text-muted-foreground">
                                           {formatTokens(modelRow.inputTokens + modelRow.cachedInputTokens + modelRow.outputTokens)} tok

@@ -76,6 +76,7 @@ export function InstanceGeneralSettings({ embedded = false }: { embedded?: boole
   }
 
   const censorUsernameInLogs = generalQuery.data?.censorUsernameInLogs === true;
+  const showApiEquivalentCosts = generalQuery.data?.showApiEquivalentCosts === true;
   const feedbackDataSharingPreference = generalQuery.data?.feedbackDataSharingPreference ?? "prompt";
   const backupRetention: BackupRetentionPolicy = generalQuery.data?.backupRetention ?? DEFAULT_BACKUP_RETENTION;
   const hiddenSettings = new Set(healthQuery.data?.hiddenSettings ?? []);
@@ -174,6 +175,25 @@ export function InstanceGeneralSettings({ embedded = false }: { embedded?: boole
         </div>
       </section>
       )}
+
+      <section>
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1.5">
+            <h2 className="text-sm font-semibold">Show costs at API rates</h2>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              Lead the dashboard and Costs page with what usage would have cost at metered API rates, so
+              subscription runs do not read as $0. Billed spend stays alongside it. Display only: budgets still count
+              billed spend. This is off by default.
+            </p>
+          </div>
+          <ToggleSwitch
+            checked={showApiEquivalentCosts}
+            onCheckedChange={() => updateGeneralMutation.mutate({ showApiEquivalentCosts: !showApiEquivalentCosts })}
+            disabled={updateGeneralMutation.isPending || signOutMutation.isPending}
+            aria-label="Toggle costs at API rates"
+          />
+        </div>
+      </section>
 
       {showBackupRetention && (
       <section>

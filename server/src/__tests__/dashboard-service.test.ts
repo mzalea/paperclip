@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
+import { agents, companies, costEvents, createDb, heartbeatRuns } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -47,6 +47,7 @@ describeEmbeddedPostgres("dashboard service", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(costEvents);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
     await db.delete(companies);
@@ -54,6 +55,43 @@ describeEmbeddedPostgres("dashboard service", () => {
 
   afterAll(async () => {
     await tempDb?.cleanup();
+  });
+
+  it("reports this month's spend at API rates beside billed spend", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    const subscriptionEvent = {
+      companyId, agentId, provider: "openai", biller: "chatgpt", billingType: "subscription_included",
+      model: "gpt-5.6-sol", inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 0, costCents: 0,
+    };
+    const monthStart = getUtcMonthStart(new Date());
+    await db.insert(costEvents).values([
+      { ...subscriptionEvent, occurredAt: new Date(monthStart.getTime() + 60_000) },
+      // last month: outside the window
+      { ...subscriptionEvent, occurredAt: new Date(monthStart.getTime() - 60_000) },
+    ]);
+
+    const summary = await dashboardService(db).summary(companyId);
+
+    expect(summary.costs.monthSpendCents).toBe(0);
+    expect(summary.costs.monthApiEquivalentCents).toBe(400);
   });
 
   it("aggregates the full 14-day run activity window without recent-run truncation", async () => {

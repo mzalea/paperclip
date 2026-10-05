@@ -1310,6 +1310,7 @@ export const storybookDashboardSummary: DashboardSummary = {
   },
   costs: {
     monthSpendCents: 67_500,
+    monthApiEquivalentCents: 67_500,
     monthBudgetCents: 250_000,
     monthUtilizationPercent: 27,
   },

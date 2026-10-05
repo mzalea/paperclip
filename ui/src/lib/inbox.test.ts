@@ -298,6 +298,7 @@ const dashboard: DashboardSummary = {
   },
   costs: {
     monthSpendCents: 900,
+    monthApiEquivalentCents: 900,
     monthBudgetCents: 1000,
     monthUtilizationPercent: 90,
   },

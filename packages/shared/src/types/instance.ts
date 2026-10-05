@@ -35,6 +35,11 @@ export interface InstanceGeneralSettings {
   feedbackDataSharingPreference: FeedbackDataSharingPreference;
   backupRetention: BackupRetentionPolicy;
   /**
+   * Lead spend displays with what usage would have cost at metered API rates,
+   * so subscription runs do not read as $0. Display only; budgets unchanged.
+   */
+  showApiEquivalentCosts: boolean;
+  /**
    * Execution policy. Absent/`"any"` = unrestricted; `"kubernetes"` forces the
    * Kubernetes sandbox provider and denies local/ssh execution.
    */

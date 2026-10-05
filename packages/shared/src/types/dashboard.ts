@@ -40,6 +40,8 @@ export interface DashboardSummary {
   };
   costs: {
     monthSpendCents: number;
+    /** month usage at metered API rates; equals monthSpendCents for billed usage */
+    monthApiEquivalentCents: number;
     monthBudgetCents: number;
     monthUtilizationPercent: number;
   };
