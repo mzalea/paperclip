@@ -289,6 +289,8 @@ async function main() {
             patch.outputTokens = update.tokens.outputTokens;
           }
           if (update.model) patch.model = update.model;
+          // A run whose only change is usage metadata has nothing for its cost row.
+          if (Object.keys(patch).length === 0) continue;
           await tx.update(costEvents).set(patch).where(eq(costEvents.heartbeatRunId, update.runId));
         }
         await tx.execute(sql`
